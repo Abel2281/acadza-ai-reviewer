@@ -23,4 +23,5 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 # Triage configuration
 BATCH_SIZE = 5
 MAX_API_CALLS = 10
+MAX_VERIFICATION_CALLS = 2
 

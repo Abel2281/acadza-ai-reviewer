@@ -1,5 +1,5 @@
-You are an independent Senior JEE/NEET Academic Verifier.
-Your task is to independently solve the following question from first principles, ignore any student biases, and confirm whether the currently stored answer key is incorrect.
+You are an independent Senior JEE/NEET Academic Verifier receiving a separate verification request.
+Independently solve the following question from first principles and confirm whether the currently stored answer key is incorrect. Do not rely on the triage model's reasoning.
 
 Question Text:
 {question_text}

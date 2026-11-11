@@ -1,4 +1,5 @@
 import re
+import math
 from typing import Dict, Any, Optional, Tuple
 
 INJECTION_PATTERNS = [
@@ -20,6 +21,19 @@ def is_injection_suspect(comment: str) -> bool:
             return True
     return False
 
+
+def normalize_confidence(value: Any) -> Optional[float]:
+    """Accept only finite, in-range JSON numbers; booleans and numeric strings are invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        confidence = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None
+    return confidence
+
 def validate_and_sanitize_result(
     result: Dict[str, Any],
     taxonomy: Dict[str, Any]
@@ -34,6 +48,20 @@ def validate_and_sanitize_result(
     """
     verdicts = taxonomy.get("verdicts", {})
     repairs = taxonomy.get("repairs", {})
+
+    confidence = normalize_confidence(result.get("confidence"))
+    if confidence is None:
+        verdict = result.get("verdict")
+        if verdict not in verdicts:
+            result["verdict"] = "not_actionable"
+            result["repair"] = None
+        elif verdict != "defect" or result.get("repair") not in repairs:
+            result["repair"] = None
+        result["edit"] = None
+        result["confidence"] = 0.0
+        result["route"] = "faculty_review"
+        return result
+    result["confidence"] = confidence
 
     verdict = result.get("verdict")
     if verdict not in verdicts:
@@ -92,13 +120,16 @@ def validate_and_sanitize_result(
     if not is_auto_allowed:
         result["route"] = "faculty_review"
     else:
-        confidence = float(result.get("confidence", 0.0))
         verification = result.get("verification")
+        verification_confidence = (
+            normalize_confidence(verification.get("confidence"))
+            if isinstance(verification, dict) else None
+        )
         if repair == "answer_key" and not (
             isinstance(verification, dict)
             and verification.get("verified") is True
-            and isinstance(verification.get("confidence"), (int, float))
-            and verification["confidence"] >= 0.85
+            and verification_confidence is not None
+            and verification_confidence >= 0.85
         ):
             result["route"] = "faculty_review"
             return result

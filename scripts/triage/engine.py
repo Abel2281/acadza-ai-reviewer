@@ -2,13 +2,15 @@ import json
 import re
 from typing import Dict, Any, List, Optional
 from backend.models import Result, Edit
-from scripts.triage.safety import is_injection_suspect, validate_and_sanitize_result
+from scripts.triage.safety import is_injection_suspect, normalize_confidence, validate_and_sanitize_result
 from scripts.triage.reply_templates import generate_student_reply
 from scripts.triage.gemini_client import GeminiClient, GeminiQuotaError
-from backend.config import BATCH_SIZE, MAX_API_CALLS
+from backend.config import BATCH_SIZE, MAX_API_CALLS, MAX_VERIFICATION_CALLS
+
+REDACTED_COMMENT = "[Student comment redacted as instruction-like content]"
 
 class TriageEngine:
-    def __init__(self, questions: List[Dict[str, Any]], reports: List[Dict[str, Any]], taxonomy: Dict[str, Any], client=None, dry_run: bool = False, progress_path=None):
+    def __init__(self, questions: List[Dict[str, Any]], reports: List[Dict[str, Any]], taxonomy: Dict[str, Any], client=None, dry_run: bool = False, progress_path=None, max_batches: Optional[int] = None, max_api_calls: Optional[int] = None, diagnostics_callback=None):
         self.questions = questions
         self.reports = reports
         self.taxonomy = taxonomy
@@ -16,8 +18,26 @@ class TriageEngine:
         self.client = client or GeminiClient()
         self.dry_run = dry_run
         self.progress_path = progress_path
-        self.batch_prompt = open("scripts/triage/prompts/batch_triage.txt", encoding="utf-8").read()
-        self.verify_prompt = open("scripts/triage/prompts/verify_answer.txt", encoding="utf-8").read()
+        self.max_batches = max_batches
+        self.max_api_calls = max_api_calls if max_api_calls is not None else MAX_API_CALLS
+        self.api_calls_made = 0
+        self.current_stage = "initialize triage engine"
+        self.diagnostics_callback = diagnostics_callback
+        with open("scripts/triage/prompts/batch_triage.txt", encoding="utf-8") as prompt_file:
+            self.batch_prompt = prompt_file.read()
+        with open("scripts/triage/prompts/verify_answer.txt", encoding="utf-8") as prompt_file:
+            self.verify_prompt = prompt_file.read()
+
+    def save_progress(self, completed, api_calls, verifications, verification_calls):
+        if not self.progress_path:
+            return
+        self.progress_path.parent.mkdir(parents=True, exist_ok=True)
+        self.progress_path.write_text(json.dumps({
+            "completed": completed,
+            "api_calls": api_calls,
+            "verifications": verifications,
+            "verification_calls": verification_calls,
+        }, indent=2), encoding="utf-8")
 
     def get_question_content(self, q: Dict[str, Any]) -> Dict[str, Any]:
         qtype = q.get("questionType", "scq")
@@ -577,22 +597,38 @@ class TriageEngine:
         }
 
     def process_all_reports(self) -> List[Dict[str, Any]]:
+        self.current_stage = "group question reports and screen comments"
         reports_by_q: Dict[str, List[Dict[str, Any]]] = {}
         for report in self.reports:
             reports_by_q.setdefault(report["questionId"], []).append(report)
         groups = list(reports_by_q.items())
+        if self.max_batches is not None:
+            groups = groups[:self.max_batches * BATCH_SIZE]
+        selected_report_ids = {report["reportId"] for _, group_reports in groups for report in group_reports}
+        # Screen every raw comment before any group payload is constructed.
+        injection_suspects = {
+            report["reportId"]: is_injection_suspect(report.get("comment", ""))
+            for report in self.reports
+        }
+        self.current_stage = "load and validate saved progress"
         progress = {}
         if self.progress_path and self.progress_path.exists():
             progress = json.loads(self.progress_path.read_text(encoding="utf-8"))
         completed = progress.get("completed", {})
+        verifications = progress.get("verifications", {})
         batches = [groups[i:i + BATCH_SIZE] for i in range(0, len(groups), BATCH_SIZE)]
+        if self.max_batches is not None:
+            batches = batches[:self.max_batches]
         api_calls = int(progress.get("api_calls", 0))
+        verification_calls = int(progress.get("verification_calls", 0))
         for batch_index, batch in enumerate(batches):
             key = str(batch_index)
             if key in completed:
                 continue
-            if api_calls >= MAX_API_CALLS:
-                raise RuntimeError("API call limit reached; resume later with saved progress")
+            self.current_stage = "enforce smoke/API request budget"
+            if api_calls >= self.max_api_calls:
+                raise RuntimeError(f"API call limit reached (saved count: {api_calls}, limit: {self.max_api_calls}); no request sent")
+            self.current_stage = "construct triage request"
             payload = []
             for qid, reports in batch:
                 question = self.questions_by_id.get(qid, {})
@@ -603,34 +639,93 @@ class TriageEngine:
                     "answer": content.get("answer"),
                     "questionType": question.get("questionType"),
                     "subject": question.get("subject"), "chapter": question.get("chapter")},
-                    "comments": [r.get("comment", "") for r in reports]})
-            verification_instructions = self.verify_prompt.replace("{question_text}", "the question object in the corresponding input group").replace("{subject}", "the input subject").replace("{chapter}", "the input chapter").replace("{stored_answer}", "the input answer").replace("{stored_solution}", "the input solution").replace("{proposed_answer}", "your proposed answer-key edit")
-            prompt = self.batch_prompt + "\n\nFor answer_key candidates, apply this independent verification prompt before returning a proposal:\n" + verification_instructions + "\n\nINPUT JSON (group_index is the array index):\n" + json.dumps(payload, ensure_ascii=False)
+                    "comments": [
+                        REDACTED_COMMENT if injection_suspects[r["reportId"]] else r.get("comment", "")
+                        for r in reports
+                    ]})
+            prompt = self.batch_prompt + "\n\nINPUT JSON (group_index is the array index):\n" + json.dumps(payload, ensure_ascii=False)
+            if self.diagnostics_callback:
+                request_body = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                }
+                if getattr(self.client, "thinking_level", None):
+                    request_body["generationConfig"]["thinkingConfig"] = {
+                        "thinkingLevel": self.client.thinking_level,
+                    }
+                encoded_body = json.dumps(request_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                self.diagnostics_callback({
+                    "question_groups": len(batch),
+                    "reports": sum(len(group_reports) for _, group_reports in batch),
+                    "prompt_characters": len(prompt),
+                    "request_body_bytes": len(encoded_body),
+                    "question_text_characters": sum(len(str(item["question"].get("question") or "")) for item in payload),
+                    "solution_text_characters": sum(len(str(item["question"].get("solution") or "")) for item in payload),
+                })
             if self.dry_run:
                 analyses = [self.run_deterministic_analysis(self.questions_by_id[qid], reports)
                             if qid in self.questions_by_id else {"verdict": "not_actionable", "confidence": 0.1, "evidence": "Question record missing."}
                             for qid, reports in batch]
                 response = [{"group_index": i, **analysis} for i, analysis in enumerate(analyses)]
             else:
+                self.current_stage = "validate Gemini API key"
                 if not self.client.has_api_key():
                     raise RuntimeError("GEMINI_API_KEY is required; use --dry-run for mocked analysis")
                 api_calls += 1
-                if self.progress_path:
-                    self.progress_path.parent.mkdir(parents=True, exist_ok=True)
-                    self.progress_path.write_text(json.dumps({"completed": completed, "api_calls": api_calls}, indent=2), encoding="utf-8")
+                self.api_calls_made += 1
+                self.save_progress(completed, api_calls, verifications, verification_calls)
+                self.current_stage = "send triage request and receive response"
                 raw = self.client.call_model(prompt)
+                self.current_stage = "parse and validate triage response"
                 parsed = self.client.extract_json(raw)
                 if not isinstance(parsed, list):
-                    raise RuntimeError(f"Batch {batch_index} returned invalid JSON; progress retained")
+                    client_error = getattr(self.client, "last_error", None)
+                    detail = f"; client diagnostic: {client_error}" if client_error else ""
+                    raise RuntimeError(f"Batch {batch_index} returned no valid JSON array{detail}; progress retained")
                 response = parsed
             analyses_by_index = {int(item["group_index"]): item for item in response
                                  if isinstance(item, dict) and str(item.get("group_index", "")).isdigit()}
             if len(analyses_by_index) != len(batch):
                 raise RuntimeError(f"Batch {batch_index} omitted or duplicated groups; progress retained")
             completed[key] = analyses_by_index
-            if self.progress_path:
-                self.progress_path.parent.mkdir(parents=True, exist_ok=True)
-                self.progress_path.write_text(json.dumps({"completed": completed, "api_calls": api_calls}, indent=2), encoding="utf-8")
+            self.save_progress(completed, api_calls, verifications, verification_calls)
+
+        # A second, separate model request is the only form of answer-key verification.
+        # At most two such calls are allowed, and they share MAX_API_CALLS with triage.
+        verification_candidates = []
+        for batch_index, batch in enumerate(batches):
+            batch_analysis = completed[str(batch_index)]
+            for group_index, (qid, _) in enumerate(batch):
+                analysis = batch_analysis.get(str(group_index), batch_analysis.get(group_index, {}))
+                if (analysis.get("verdict") == "defect" and analysis.get("repair") == "answer_key"
+                        and analysis.get("edit") and qid not in verifications):
+                    verification_candidates.append((qid, analysis))
+        for qid, analysis in verification_candidates:
+            if verification_calls >= MAX_VERIFICATION_CALLS or api_calls >= self.max_api_calls:
+                break
+            if self.dry_run or not self.client.has_api_key():
+                break
+            question = self.questions_by_id.get(qid, {})
+            content = self.get_question_content(question)
+            edit = analysis["edit"]
+            verification_prompt = self.verify_prompt.format(
+                question_text=content.get("question", ""),
+                subject=question.get("subject", ""),
+                chapter=question.get("chapter", ""),
+                stored_answer=json.dumps(content.get("answer"), ensure_ascii=False),
+                stored_solution=content.get("solution", ""),
+                proposed_answer=edit.get("replace", ""),
+            )
+            api_calls += 1
+            verification_calls += 1
+            self.api_calls_made += 1
+            self.save_progress(completed, api_calls, verifications, verification_calls)
+            parsed_verification = self.client.extract_json(self.client.call_model(verification_prompt))
+            if not isinstance(parsed_verification, dict):
+                parsed_verification = {"verified": False, "confidence": 0.0,
+                                       "derived_answer": "", "step_by_step_proof": "No valid verifier response."}
+            verifications[qid] = parsed_verification
+            self.save_progress(completed, api_calls, verifications, verification_calls)
 
         results = []
         for batch_index, batch in enumerate(batches):
@@ -641,12 +736,12 @@ class TriageEngine:
                 content = self.get_question_content(question)
                 for report in reports:
                     comment = report.get("comment", "")
-                    candidate = {k: analysis.get(k) for k in ("verdict", "repair", "edit", "confidence", "evidence", "verification")}
-                    if not isinstance(candidate.get("confidence"), (int, float)) or not 0 <= candidate["confidence"] <= 1:
-                        candidate["confidence"] = 0.1
+                    candidate = {k: analysis.get(k) for k in ("verdict", "repair", "edit", "confidence", "evidence")}
+                    if qid in verifications:
+                        candidate["verification"] = verifications[qid]
                     if not isinstance(candidate.get("evidence"), str) or len(candidate["evidence"].strip()) < 6:
                         candidate["evidence"] = "The model did not provide sufficient evidence; faculty review is required."
-                    if is_injection_suspect(comment):
+                    if injection_suspects[report["reportId"]]:
                         candidate.update(verdict="not_actionable", repair=None, edit=None, confidence=0.95,
                                          evidence="Student comment contains an instruction-like pattern; treated as untrusted report content.")
                     edit = candidate.get("edit")
@@ -654,21 +749,24 @@ class TriageEngine:
                     source_text = source_value if isinstance(source_value, str) else json.dumps(source_value, ensure_ascii=False) if source_value is not None else ""
                     if isinstance(edit, dict) and edit.get("find") not in source_text:
                         candidate["edit"] = None
-                        candidate["confidence"] = min(float(candidate.get("confidence", 0)), 0.5)
+                        candidate_confidence = normalize_confidence(candidate.get("confidence"))
+                        if candidate_confidence is not None:
+                            candidate["confidence"] = min(candidate_confidence, 0.5)
                         candidate["evidence"] = str(candidate.get("evidence", "")) + " Proposed exact text was not found in the source; sent for faculty review."
                     validated = validate_and_sanitize_result(candidate, self.taxonomy)
                     validated.pop("verification", None)
-                    confidence = validated.get("confidence", 0)
-                    if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
-                        validated.update(confidence=0.1, edit=None, route="faculty_review")
+                    confidence = normalize_confidence(validated.get("confidence"))
+                    if confidence is None:
+                        validated.update(confidence=0.0, edit=None, route="faculty_review")
+                    else:
+                        validated["confidence"] = confidence
                     validated.update(reportId=report["reportId"], questionId=qid,
                         student_reply=generate_student_reply(validated["verdict"], validated.get("repair"), comment,
                                                              validated.get("evidence", ""), validated.get("edit")))
                     results.append(validated)
-        if len(results) != len(self.reports):
-            raise RuntimeError("Not every report was validated; final results are withheld")
-        report_ids = {report["reportId"] for report in self.reports}
-        if {result["reportId"] for result in results} != report_ids:
+        if len(results) != len(selected_report_ids):
+            raise RuntimeError("Not every selected report was validated; final results are withheld")
+        if {result["reportId"] for result in results} != selected_report_ids:
             raise RuntimeError("Report coverage validation failed; final results are withheld")
         required = {"reportId", "questionId", "verdict", "repair", "edit", "route", "confidence", "evidence", "student_reply"}
         if any(set(result) != required or result["verdict"] not in self.taxonomy.get("verdicts", {})

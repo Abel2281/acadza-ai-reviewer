@@ -39,8 +39,8 @@ CRITICAL INSTRUCTIONS:
 5. Evidence:
    - Provide concise, objective factual proof (e.g., "Solution calculates V=50V (option A); answer key currently set to C").
 
-5. For every proposed answer_key repair, independently derive the answer before proposing it. Never invent missing options, values, diagrams, or other content. If a safe exact edit cannot be recovered, return edit null and preserve the defect classification for faculty review.
+6. Do not claim independent answer-key verification in this batch. Answer-key candidates may be sent for a separate verifier request. Never invent missing options, values, diagrams, or other content. If a safe exact edit cannot be recovered, return edit null and preserve the defect classification for faculty review.
 
 Return a valid JSON array of objects with keys:
-"group_index", "verdict", "repair", "edit", "confidence", "evidence", "needs_verify". For answer_key proposals also include "verification": {"verified": boolean, "derived_answer": string, "step_by_step_proof": string, "confidence": number}. Include one object per input group.
+"group_index", "verdict", "repair", "edit", "confidence", "evidence", "needs_verify". Include one object per input group.
 

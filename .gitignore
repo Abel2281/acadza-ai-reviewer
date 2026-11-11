@@ -5,6 +5,7 @@ backend/.env
 data/triage_progress.json
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -36,3 +37,6 @@ ehthumbs.db
 $RECYCLE.BIN/
 .DS_Store
 
+# Local Gemini smoke-test artifacts
+data/gemini_smoke_test.json
+data/gemini_smoke_test_progress.json

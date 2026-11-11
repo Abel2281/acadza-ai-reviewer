@@ -48,6 +48,71 @@ def test_safety_guard():
     assert validated_bad["verdict"] == "not_actionable"
     assert validated_bad["route"] == "no_change"
 
+
+def test_malformed_confidence_always_escalates():
+    with open("data/taxonomy.json", "r", encoding="utf-8") as f:
+        taxonomy = json.load(f)
+    invalid_values = [None, "0.99", True, float("nan"), float("inf"), float("-inf"), -0.01, 1.01]
+    for confidence in invalid_values:
+        result = validate_and_sanitize_result({
+            "verdict": "defect", "repair": "answer_key",
+            "edit": {"field": "answer", "find": "B", "replace": "A"},
+            "confidence": confidence, "evidence": "Checked candidate edit.",
+            "verification": {"verified": True, "confidence": 0.99},
+        }, taxonomy)
+        assert result["route"] == "faculty_review"
+        assert result["edit"] is None
+        assert result["confidence"] == 0.0
+
+        non_defect = validate_and_sanitize_result({
+            "verdict": "no_error", "repair": None, "edit": None,
+            "confidence": confidence, "evidence": "Student report checked.",
+        }, taxonomy)
+        assert non_defect["route"] == "faculty_review"
+        assert non_defect["confidence"] == 0.0
+
+    missing_confidence = validate_and_sanitize_result({
+        "verdict": "defect", "repair": "spelling",
+        "edit": {"field": "question", "find": "old", "replace": "new"},
+        "evidence": "Checked candidate edit.",
+    }, taxonomy)
+    assert missing_confidence["route"] == "faculty_review"
+    assert missing_confidence["confidence"] == 0.0
+
+    # Verification confidence has the same strict numeric and finite checks.
+    for confidence in invalid_values:
+        result = validate_and_sanitize_result({
+            "verdict": "defect", "repair": "answer_key",
+            "edit": {"field": "answer", "find": "B", "replace": "A"},
+            "confidence": 0.99, "evidence": "Checked candidate edit.",
+            "verification": {"verified": True, "confidence": confidence},
+        }, taxonomy)
+        assert result["route"] == "faculty_review"
+
+    missing_verification_confidence = validate_and_sanitize_result({
+        "verdict": "defect", "repair": "answer_key",
+        "edit": {"field": "answer", "find": "B", "replace": "A"},
+        "confidence": 0.99, "evidence": "Checked candidate edit.",
+        "verification": {"verified": True},
+    }, taxonomy)
+    assert missing_verification_confidence["route"] == "faculty_review"
+
+    verified = validate_and_sanitize_result({
+        "verdict": "defect", "repair": "answer_key",
+        "edit": {"field": "answer", "find": "B", "replace": "A"},
+        "confidence": 0.99, "evidence": "Checked candidate edit.",
+        "verification": {"verified": True, "confidence": 0.85},
+    }, taxonomy)
+    assert verified["route"] == "auto_apply"
+
+    uncertain = validate_and_sanitize_result({
+        "verdict": "defect", "repair": "spelling",
+        "edit": {"field": "question", "find": "old", "replace": "new"},
+        "confidence": 0.84, "evidence": "Checked candidate edit.",
+    }, taxonomy)
+    assert uncertain["route"] == "faculty_review"
+
 if __name__ == "__main__":
     test_safety_guard()
+    test_malformed_confidence_always_escalates()
     print("test_safety_guard PASSED!")
