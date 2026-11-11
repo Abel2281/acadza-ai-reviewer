@@ -73,7 +73,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
         {/* Rendered HTML & Native MathML */}
         <div
-          className="prose prose-slate dark:prose-invert max-w-none text-slate-900 dark:text-slate-100 leading-relaxed font-sans text-sm sm:text-base [&_math]:inline-block [&_math]:mx-0.5 [&_h3]:text-base [&_h3]:font-medium [&_h3]:m-0"
+          className="prose prose-slate dark:prose-invert max-w-none text-white leading-relaxed font-sans text-sm sm:text-base [&_*]:!text-gray-100 [&_math]:inline-block [&_math]:mx-0.5 [&_h3]:text-base [&_h3]:font-medium [&_h3]:m-0"
           dangerouslySetInnerHTML={{ __html: sanitizedQuestion }}
         />
 
