@@ -38,7 +38,7 @@ export async function approveAction(reportId: string, facultyName: string, reaso
     headers: { "Content-Type": "application/json" },
     body: jsonStringify({ faculty_name: facultyName, reason })
   });
-  if (!res.ok) throw new Error("Approval failed");
+  if (!res.ok) throw new Error(await responseError(res, "Approval failed"));
   return res.json();
 }
 
@@ -48,7 +48,7 @@ export async function editAction(reportId: string, facultyName: string, edit: Ed
     headers: { "Content-Type": "application/json" },
     body: jsonStringify({ faculty_name: facultyName, edit, reason })
   });
-  if (!res.ok) throw new Error("Edit action failed");
+  if (!res.ok) throw new Error(await responseError(res, "Edit action failed"));
   return res.json();
 }
 
@@ -58,7 +58,7 @@ export async function rejectAction(reportId: string, facultyName: string, reason
     headers: { "Content-Type": "application/json" },
     body: jsonStringify({ faculty_name: facultyName, reason })
   });
-  if (!res.ok) throw new Error("Rejection failed");
+  if (!res.ok) throw new Error(await responseError(res, "Rejection failed"));
   return res.json();
 }
 
@@ -71,4 +71,13 @@ export async function fetchAuditLogs(reportId?: string): Promise<AuditEntry[]> {
 
 function jsonStringify(obj: any): string {
   return JSON.stringify(obj);
+}
+
+async function responseError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    return body.detail || fallback;
+  } catch {
+    return fallback;
+  }
 }

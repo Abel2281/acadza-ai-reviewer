@@ -7,12 +7,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.config import GEMINI_API_KEY, BASE_DIR
-from backend.db import init_db
+from backend.db import init_db, initialize_pending_statuses
 from backend.loader import loader
 from backend.routers import results, queue, metrics, actions, audit
 
 # Initialize SQLite database on module import
 init_db()
+initialize_pending_statuses([report["reportId"] for report in loader.reports_raw])
 
 app = FastAPI(
     title="Acadza AI Quality Control API",

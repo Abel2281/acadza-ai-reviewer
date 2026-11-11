@@ -1,16 +1,24 @@
 import sys
 from pathlib import Path
+import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from fastapi import HTTPException
 from backend.models import ActionRequest, Edit
 from backend.routers.results import get_all_results, get_single_result
 from backend.routers.queue import get_queue
 from backend.routers.metrics import get_metrics
 from backend.routers.actions import approve_result, edit_and_approve_result, reject_result
 from backend.routers.audit import get_all_audit_logs, get_report_audit_logs
+import backend.db as db
 from backend.db import init_db, get_review_statuses
 
+_test_db_dir = None
+
 def run_tests():
+    global _test_db_dir
+    _test_db_dir = tempfile.TemporaryDirectory()
+    db.DB_FILE = Path(_test_db_dir.name) / "audit.db"
     init_db()
 
     # 1. Results endpoint
@@ -35,13 +43,19 @@ def run_tests():
     m = get_metrics()
     assert m["total_reports"] == 44
     assert m["defects_count"] == 26
-    assert m["auto_apply_count"] == 17
+    assert m["auto_apply_count"] == m["by_route"]["auto_apply"]
     print("4. get_metrics: OK", m)
 
     # 5. Actions: Approve
     appr = approve_result("R001", ActionRequest(faculty_name="Dr. Mehta", reason="Checked solution"))
     assert appr["status"] == "approved"
     assert next(r for r in get_all_results() if r["reportId"] == "R001")["review_status"] == "approved"
+    assert not any(group["questionId"] == r001["result"]["questionId"] for group in get_queue())
+    try:
+        approve_result("R002", ActionRequest(faculty_name="Dr. Mehta"))
+        raise AssertionError("A completed sibling report must return HTTP 409")
+    except HTTPException as exc:
+        assert exc.status_code == 409
     print("5. approve_result: OK")
 
     # 6. Actions: Edit
@@ -66,7 +80,7 @@ def run_tests():
 
     # 8. Audit logs
     logs = get_all_audit_logs()
-    assert len(logs) >= 3
+    assert len(logs) == 3
     r001_logs = get_report_audit_logs("R001")
     assert len(r001_logs) >= 1
     print("8. audit_logs query: OK")

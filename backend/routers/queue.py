@@ -2,7 +2,7 @@ import re
 from fastapi import APIRouter
 from typing import List, Dict, Any
 from backend.loader import loader
-from backend.db import get_review_statuses
+from backend.db import TERMINAL_REVIEW_STATUSES, get_review_statuses
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 
@@ -17,10 +17,17 @@ def strip_html(text: str) -> str:
 def get_queue():
     loader.reload_results()
     review_statuses = get_review_statuses()
+    completed_question_ids = {
+        report["questionId"]
+        for report in loader.reports_raw
+        if review_statuses.get(report["reportId"]) in TERMINAL_REVIEW_STATUSES
+    }
     groups: Dict[str, Dict[str, Any]] = {}
 
     for r in loader.reports_raw:
         qid = r["questionId"]
+        if qid in completed_question_ids:
+            continue
         report_id = r["reportId"]
         result = loader.get_result(report_id) or {}
         question = loader.get_question(qid) or {}

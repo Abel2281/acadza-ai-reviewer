@@ -23,13 +23,16 @@ def get_single_result(report_id: str):
     content = loader.get_question_content(question) if question else {}
 
     # Get sibling reports for this question
+    statuses = get_review_statuses()
     siblings = [
-        loader.get_result(r["reportId"])
+        ({**loader.get_result(r["reportId"]),
+          "review_status": statuses.get(r["reportId"], "pending")}
+         if loader.get_result(r["reportId"]) else None)
         for r in loader.reports_by_question.get(res["questionId"], [])
         if r["reportId"] != report_id
     ]
 
-    res = {**res, "review_status": get_review_statuses().get(report_id, "pending")}
+    res = {**res, "review_status": statuses.get(report_id, "pending")}
     return {
         "result": res,
         "report": report,

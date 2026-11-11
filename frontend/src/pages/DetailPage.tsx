@@ -144,6 +144,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
 
   const { result, report, question, question_content, sibling_results } = data;
   const isAutoFalse = result.route === "faculty_review" && result.verdict === "defect";
+  const isPending = result.review_status === "pending";
 
   return (
     <div className="space-y-6 pb-16">
@@ -282,7 +283,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
               <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300">
                 Proposed Surgical Edit
               </h4>
-              {result.edit && !isEditing && (
+              {isPending && result.edit && !isEditing && (
                 <button
                   onClick={() => setIsEditing(true)}
                   className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
@@ -293,7 +294,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
               )}
             </div>
 
-            {isEditing ? (
+            {isPending && isEditing ? (
               <div className="bg-white dark:bg-slate-900 rounded-xl p-4 border border-indigo-200 dark:border-indigo-800 shadow-sm space-y-3">
                 <div className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
                   Authoring Surgical Correction
@@ -343,7 +344,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
                   </button>
                   <button
                     onClick={handleSaveEdit}
-                    disabled={submitting}
+                    disabled={submitting || !isPending}
                     className="px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded flex items-center gap-1.5"
                   >
                     <Save className="w-3.5 h-3.5" />
@@ -378,6 +379,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
               Faculty Signoff &amp; Review Actions
             </h4>
 
+            {isPending ? <>
             {/* Faculty Identity Input */}
             <div>
               <label className="text-xs font-medium text-slate-500">Signing Faculty Member:</label>
@@ -410,6 +412,11 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
                 <span>Reject</span>
               </button>
             </div>
+            </> : (
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                This question group is {result.review_status}. It remains available in the Audit Log.
+              </p>
+            )}
           </div>
 
           {/* SQLite Audit History for this Report */}
@@ -459,7 +466,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
       </div>
 
       {/* Reject Modal */}
-      {showRejectModal && (
+      {showRejectModal && isPending && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-xl space-y-4 animate-scaleUp">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">

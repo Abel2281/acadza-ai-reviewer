@@ -65,13 +65,13 @@ def test_results_json_schema():
     assert r027["verdict"] == "not_actionable"
     assert r027["route"] == "no_change"
 
-    # Multi-report group test (LCR circuit)
+    # Multi-report answer-key proposals without independent verification stay in faculty review.
     lcr_group = [r for r in results if r["questionId"] == "60f744b3f1b9bc7cc7b4a949"]
     assert len(lcr_group) == 3
     for r in lcr_group:
         assert r["verdict"] == "defect"
         assert r["repair"] == "answer_key"
-        assert r["route"] == "auto_apply"
+        assert r["route"] == "faculty_review"
 
 if __name__ == "__main__":
     test_results_json_schema()
