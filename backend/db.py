@@ -24,6 +24,14 @@ def init_db():
                 created_at   TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS review_status (
+                report_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                audit_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
 
 def record_audit(
@@ -69,3 +77,15 @@ def get_audit_logs(report_id: Optional[str] = None, limit: int = 50, offset: int
             """, (limit, offset))
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+def set_review_status(report_id: str, status: str, audit_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("""INSERT INTO review_status(report_id,status,audit_id,updated_at)
+            VALUES(?,?,?,?) ON CONFLICT(report_id) DO UPDATE SET
+            status=excluded.status,audit_id=excluded.audit_id,updated_at=excluded.updated_at""",
+            (report_id, status, audit_id, datetime.utcnow().isoformat() + "Z"))
+        conn.commit()
+
+def get_review_statuses() -> Dict[str, str]:
+    with get_connection() as conn:
+        return {row["report_id"]: row["status"] for row in conn.execute("SELECT report_id,status FROM review_status")}

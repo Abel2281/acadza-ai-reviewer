@@ -43,7 +43,7 @@ def health_check():
     return {
         "status": "healthy",
         "ai_enabled": has_key,
-        "mode": "live_ai" if has_key else "precomputed",
+        "mode": "gemini_available" if has_key else "precomputed",
         "results_count": len(loader.results_raw),
         "reports_count": len(loader.reports_raw),
         "questions_count": len(loader.questions_raw),

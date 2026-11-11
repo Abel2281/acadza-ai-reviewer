@@ -74,7 +74,8 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
     if (!data) return;
     setSubmitting(true);
     try {
-      await approveAction(reportId, facultyName, "Approved by faculty after inspection");
+      const action = await approveAction(reportId, facultyName, "Approved by faculty after inspection");
+      setData({ ...data, result: { ...data.result, review_status: action.status } });
       const updatedLogs = await fetchAuditLogs(reportId);
       setAuditLogs(updatedLogs);
       setActionSuccessMessage("Correction approved and logged to audit trail.");
@@ -90,7 +91,8 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
     if (!data) return;
     setSubmitting(true);
     try {
-      await editAction(reportId, facultyName, editForm, "Modified by faculty");
+      const action = await editAction(reportId, facultyName, editForm, "Modified by faculty");
+      setData({ ...data, result: { ...data.result, review_status: action.status } });
       const updatedLogs = await fetchAuditLogs(reportId);
       setAuditLogs(updatedLogs);
       setIsEditing(false);
@@ -110,7 +112,8 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
     }
     setSubmitting(true);
     try {
-      await rejectAction(reportId, facultyName, rejectReason);
+      const action = await rejectAction(reportId, facultyName, rejectReason);
+      setData({ ...data, result: { ...data.result, review_status: action.status } });
       const updatedLogs = await fetchAuditLogs(reportId);
       setAuditLogs(updatedLogs);
       setShowRejectModal(false);
@@ -203,6 +206,7 @@ export const DetailPage: React.FC<DetailPageProps> = ({ reportId, onBack, onSele
             <div className="flex items-center gap-2">
               <StatusBadge type="verdict" value={result.verdict} size="sm" />
               <StatusBadge type="route" value={result.route} size="sm" />
+              {result.review_status && <span className="text-xs text-slate-500">Faculty status: {result.review_status}</span>}
             </div>
           </div>
 

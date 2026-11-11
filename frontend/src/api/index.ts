@@ -1,6 +1,6 @@
 import type { Metrics, QueueGroup, Result, SingleResultDetail, AuditEntry, Edit } from "../types";
 
-const API_BASE = "http://127.0.0.1:8000/api";
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL ?? ""}/api`;
 
 export async function fetchHealth(): Promise<any> {
   const res = await fetch(`${API_BASE}/health`);

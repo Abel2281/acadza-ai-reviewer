@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, Optional
 from backend.models import ActionRequest
 from backend.loader import loader
-from backend.db import record_audit
+from backend.db import record_audit, set_review_status
 
 router = APIRouter(prefix="/api/actions", tags=["actions"])
 
@@ -23,6 +23,7 @@ def approve_result(report_id: str, req: ActionRequest):
         new_edit=old_edit,
         reason=req.reason
     )
+    set_review_status(report_id, "approved", audit_id)
 
     return {
         "status": "approved",
@@ -53,6 +54,7 @@ def edit_and_approve_result(report_id: str, req: ActionRequest):
         new_edit=new_edit_dict,
         reason=req.reason
     )
+    set_review_status(report_id, "edited", audit_id)
 
     return {
         "status": "edited",
@@ -79,6 +81,7 @@ def reject_result(report_id: str, req: ActionRequest):
         new_edit=None,
         reason=req.reason or "Rejected by faculty"
     )
+    set_review_status(report_id, "rejected", audit_id)
 
     return {
         "status": "rejected",

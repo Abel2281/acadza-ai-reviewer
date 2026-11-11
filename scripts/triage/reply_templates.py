@@ -43,6 +43,8 @@ def generate_student_reply(
         return "We carefully verified this question and re-checked the solution steps. The question and answer key are correct as published. Keep up the thorough practice!"
 
     if verdict == "defect":
+        if repair == "option_repair" and not edit:
+            return "Thank you for reporting this. The question shows only three options, and the solution points to option C. Our faculty is reviewing what should be restored before any change is made."
         if repair == "answer_key":
             if edit and edit.get("replace"):
                 return f"You're completely right, and thank you for catching this. The answer key was incorrect and is being updated to option {edit['replace']}. We appreciate your dedication!"

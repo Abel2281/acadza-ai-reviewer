@@ -1,6 +1,8 @@
 # Environment variables
 backend/.env
 .env
+**/.env
+data/triage_progress.json
 
 # Python
 __pycache__/

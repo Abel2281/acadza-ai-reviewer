@@ -8,7 +8,7 @@ from backend.routers.queue import get_queue
 from backend.routers.metrics import get_metrics
 from backend.routers.actions import approve_result, edit_and_approve_result, reject_result
 from backend.routers.audit import get_all_audit_logs, get_report_audit_logs
-from backend.db import init_db
+from backend.db import init_db, get_review_statuses
 
 def run_tests():
     init_db()
@@ -35,12 +35,13 @@ def run_tests():
     m = get_metrics()
     assert m["total_reports"] == 44
     assert m["defects_count"] == 26
-    assert m["auto_apply_count"] == 19
+    assert m["auto_apply_count"] == 17
     print("4. get_metrics: OK", m)
 
     # 5. Actions: Approve
     appr = approve_result("R001", ActionRequest(faculty_name="Dr. Mehta", reason="Checked solution"))
     assert appr["status"] == "approved"
+    assert next(r for r in get_all_results() if r["reportId"] == "R001")["review_status"] == "approved"
     print("5. approve_result: OK")
 
     # 6. Actions: Edit
@@ -50,11 +51,17 @@ def run_tests():
         reason="Answer is D"
     ))
     assert ed["status"] == "edited"
+    assert next(r for r in get_all_results() if r["reportId"] == "R004")["review_status"] == "edited"
     print("6. edit_and_approve_result: OK")
 
     # 7. Actions: Reject
     rej = reject_result("R033", ActionRequest(faculty_name="Dr. Mehta", reason="Correct significant digits"))
     assert rej["status"] == "rejected"
+    assert next(r for r in get_all_results() if r["reportId"] == "R033")["review_status"] == "rejected"
+    init_db()  # Reopening the SQLite database preserves the latest action.
+    assert get_review_statuses()["R001"] == "approved"
+    assert get_review_statuses()["R004"] == "edited"
+    assert get_review_statuses()["R033"] == "rejected"
     print("7. reject_result: OK")
 
     # 8. Audit logs

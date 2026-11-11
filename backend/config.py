@@ -16,8 +16,8 @@ TAXONOMY_FILE = DATA_DIR / "taxonomy.json"
 RESULTS_FILE = DATA_DIR / "results.json"
 DB_FILE = BACKEND_DIR / "audit.db"
 
-# Model identifier (default to gemini-2.0-flash or as specified)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+# Fixed model identifier used by the opt-in triage command.
+GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Triage configuration

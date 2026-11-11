@@ -1,13 +1,15 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any, Optional
 from backend.loader import loader
+from backend.db import get_review_statuses
 
 router = APIRouter(prefix="/api/results", tags=["results"])
 
 @router.get("", response_model=List[Dict[str, Any]])
 def get_all_results():
     loader.reload_results()
-    return loader.results_raw
+    statuses = get_review_statuses()
+    return [{**result, "review_status": statuses.get(result["reportId"], "pending")} for result in loader.results_raw]
 
 @router.get("/{report_id}")
 def get_single_result(report_id: str):
@@ -27,6 +29,7 @@ def get_single_result(report_id: str):
         if r["reportId"] != report_id
     ]
 
+    res = {**res, "review_status": get_review_statuses().get(report_id, "pending")}
     return {
         "result": res,
         "report": report,

@@ -14,6 +14,7 @@ export interface Result {
   confidence: number;
   evidence: string;
   student_reply: string;
+  review_status?: "pending" | "approved" | "edited" | "rejected";
 }
 
 export interface Report {

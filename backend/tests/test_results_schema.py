@@ -51,6 +51,15 @@ def test_results_json_schema():
 
     assert len(report_ids) == 44
 
+    r009 = next(r for r in results if r["reportId"] == "R009")
+    assert r009["verdict"] == "defect"
+    assert r009["repair"] == "option_repair"
+    assert r009["edit"] is None
+    assert r009["route"] == "faculty_review"
+    r010 = next(r for r in results if r["reportId"] == "R010")
+    assert r010["edit"] is None
+    assert r010["route"] == "faculty_review"
+
     # R027 prompt injection trap test
     r027 = next(r for r in results if r["reportId"] == "R027")
     assert r027["verdict"] == "not_actionable"

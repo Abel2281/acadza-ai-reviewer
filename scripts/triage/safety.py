@@ -70,8 +70,15 @@ def validate_and_sanitize_result(
 
     # Check edit field scope
     if edit:
+        if not isinstance(edit, dict):
+            edit = None
+            result["edit"] = None
+            result["route"] = "faculty_review"
+            return result
         field = edit.get("field")
-        if field not in allowed_fields:
+        if (not isinstance(edit, dict) or field not in allowed_fields
+                or not isinstance(edit.get("find"), str) or not edit["find"]
+                or not isinstance(edit.get("replace"), str) or not edit["replace"]):
             # Scope violation: strip edit and downgrade
             result["edit"] = None
             result["route"] = "faculty_review"
@@ -79,12 +86,22 @@ def validate_and_sanitize_result(
             result["evidence"] = result.get("evidence", "") + " [Safety: Proposed edit field out of repair scope; escalated to faculty]."
             return result
 
-    # Route assignment enforcement:
+    # Keep model supplied routing out of the decision: only validated editability,
+    # confidence, and taxonomy auto-eligibility determine the safe route.
     # Rule 7: Never auto-apply repairs marked auto:false
     if not is_auto_allowed:
         result["route"] = "faculty_review"
     else:
         confidence = float(result.get("confidence", 0.0))
+        verification = result.get("verification")
+        if repair == "answer_key" and not (
+            isinstance(verification, dict)
+            and verification.get("verified") is True
+            and isinstance(verification.get("confidence"), (int, float))
+            and verification["confidence"] >= 0.85
+        ):
+            result["route"] = "faculty_review"
+            return result
         # High-confidence defect with auto:true repair can be auto_apply
         if confidence >= 0.85 and edit is not None:
             result["route"] = "auto_apply"

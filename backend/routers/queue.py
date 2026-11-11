@@ -2,6 +2,7 @@ import re
 from fastapi import APIRouter
 from typing import List, Dict, Any
 from backend.loader import loader
+from backend.db import get_review_statuses
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 
@@ -15,6 +16,7 @@ def strip_html(text: str) -> str:
 @router.get("")
 def get_queue():
     loader.reload_results()
+    review_statuses = get_review_statuses()
     groups: Dict[str, Dict[str, Any]] = {}
 
     for r in loader.reports_raw:
@@ -43,7 +45,7 @@ def get_queue():
             }
 
         groups[qid]["reports"].append(r)
-        groups[qid]["results"].append(result)
+        groups[qid]["results"].append({**result, "review_status": review_statuses.get(report_id, "pending")})
         groups[qid]["report_count"] += 1
 
     # Compute urgency score and summary indicators for each group

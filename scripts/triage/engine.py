@@ -1,17 +1,23 @@
 import json
+import re
 from typing import Dict, Any, List, Optional
 from backend.models import Result, Edit
 from scripts.triage.safety import is_injection_suspect, validate_and_sanitize_result
 from scripts.triage.reply_templates import generate_student_reply
-from scripts.triage.gemini_client import GeminiClient
+from scripts.triage.gemini_client import GeminiClient, GeminiQuotaError
+from backend.config import BATCH_SIZE, MAX_API_CALLS
 
 class TriageEngine:
-    def __init__(self, questions: List[Dict[str, Any]], reports: List[Dict[str, Any]], taxonomy: Dict[str, Any]):
+    def __init__(self, questions: List[Dict[str, Any]], reports: List[Dict[str, Any]], taxonomy: Dict[str, Any], client=None, dry_run: bool = False, progress_path=None):
         self.questions = questions
         self.reports = reports
         self.taxonomy = taxonomy
         self.questions_by_id = {q["_id"]: q for q in questions}
-        self.client = GeminiClient()
+        self.client = client or GeminiClient()
+        self.dry_run = dry_run
+        self.progress_path = progress_path
+        self.batch_prompt = open("scripts/triage/prompts/batch_triage.txt", encoding="utf-8").read()
+        self.verify_prompt = open("scripts/triage/prompts/verify_answer.txt", encoding="utf-8").read()
 
     def get_question_content(self, q: Dict[str, Any]) -> Dict[str, Any]:
         qtype = q.get("questionType", "scq")
@@ -88,10 +94,10 @@ class TriageEngine:
             return {
                 "verdict": "defect",
                 "repair": "option_repair",
-                "edit": {"field": "question", "find": "</h3>", "replace": "<br/>(D) 14 m/s</h3>"},
+                "edit": None,
                 "confidence": 0.94,
                 "evidence": "Question HTML provides only 3 options (A, B, C) for a standard single-choice question (SCQ), missing Option D entirely.",
-                "needs_verify": False
+                "needs_verify": True
             }
 
         # Case: 68e872546e45ba37dcc16bc0 (R011) - Coulomb's law ratio, blank option C
@@ -571,95 +577,105 @@ class TriageEngine:
         }
 
     def process_all_reports(self) -> List[Dict[str, Any]]:
-        # Group reports by questionId
         reports_by_q: Dict[str, List[Dict[str, Any]]] = {}
-        for r in self.reports:
-            reports_by_q.setdefault(r["questionId"], []).append(r)
-
-        results: List[Dict[str, Any]] = []
-
-        # Analyze each question group
-        for qid, q_reports in reports_by_q.items():
-            question = self.questions_by_id.get(qid)
-            if not question:
-                # If question missing from questions.json
-                for r in q_reports:
-                    results.append({
-                        "reportId": r["reportId"],
-                        "questionId": qid,
-                        "verdict": "not_actionable",
-                        "repair": None,
-                        "edit": None,
-                        "route": "no_change",
-                        "confidence": 0.90,
-                        "evidence": "Question record could not be found in active database.",
-                        "student_reply": "Thank you for reaching out. We could not locate the active question record."
-                    })
+        for report in self.reports:
+            reports_by_q.setdefault(report["questionId"], []).append(report)
+        groups = list(reports_by_q.items())
+        progress = {}
+        if self.progress_path and self.progress_path.exists():
+            progress = json.loads(self.progress_path.read_text(encoding="utf-8"))
+        completed = progress.get("completed", {})
+        batches = [groups[i:i + BATCH_SIZE] for i in range(0, len(groups), BATCH_SIZE)]
+        api_calls = int(progress.get("api_calls", 0))
+        for batch_index, batch in enumerate(batches):
+            key = str(batch_index)
+            if key in completed:
                 continue
+            if api_calls >= MAX_API_CALLS:
+                raise RuntimeError("API call limit reached; resume later with saved progress")
+            payload = []
+            for qid, reports in batch:
+                question = self.questions_by_id.get(qid, {})
+                content = self.get_question_content(question)
+                payload.append({"question": {
+                    "question": content.get("question", ""),
+                    "solution": content.get("solution", ""),
+                    "answer": content.get("answer"),
+                    "questionType": question.get("questionType"),
+                    "subject": question.get("subject"), "chapter": question.get("chapter")},
+                    "comments": [r.get("comment", "") for r in reports]})
+            verification_instructions = self.verify_prompt.replace("{question_text}", "the question object in the corresponding input group").replace("{subject}", "the input subject").replace("{chapter}", "the input chapter").replace("{stored_answer}", "the input answer").replace("{stored_solution}", "the input solution").replace("{proposed_answer}", "your proposed answer-key edit")
+            prompt = self.batch_prompt + "\n\nFor answer_key candidates, apply this independent verification prompt before returning a proposal:\n" + verification_instructions + "\n\nINPUT JSON (group_index is the array index):\n" + json.dumps(payload, ensure_ascii=False)
+            if self.dry_run:
+                analyses = [self.run_deterministic_analysis(self.questions_by_id[qid], reports)
+                            if qid in self.questions_by_id else {"verdict": "not_actionable", "confidence": 0.1, "evidence": "Question record missing."}
+                            for qid, reports in batch]
+                response = [{"group_index": i, **analysis} for i, analysis in enumerate(analyses)]
+            else:
+                if not self.client.has_api_key():
+                    raise RuntimeError("GEMINI_API_KEY is required; use --dry-run for mocked analysis")
+                api_calls += 1
+                if self.progress_path:
+                    self.progress_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.progress_path.write_text(json.dumps({"completed": completed, "api_calls": api_calls}, indent=2), encoding="utf-8")
+                raw = self.client.call_model(prompt)
+                parsed = self.client.extract_json(raw)
+                if not isinstance(parsed, list):
+                    raise RuntimeError(f"Batch {batch_index} returned invalid JSON; progress retained")
+                response = parsed
+            analyses_by_index = {int(item["group_index"]): item for item in response
+                                 if isinstance(item, dict) and str(item.get("group_index", "")).isdigit()}
+            if len(analyses_by_index) != len(batch):
+                raise RuntimeError(f"Batch {batch_index} omitted or duplicated groups; progress retained")
+            completed[key] = analyses_by_index
+            if self.progress_path:
+                self.progress_path.parent.mkdir(parents=True, exist_ok=True)
+                self.progress_path.write_text(json.dumps({"completed": completed, "api_calls": api_calls}, indent=2), encoding="utf-8")
 
-            # Check if Gemini API is available and enabled
-            q_analysis = None
-            if self.client.has_api_key():
-                # In live mode with key, try model call
-                pass
-
-            if not q_analysis:
-                q_analysis = self.run_deterministic_analysis(question, q_reports)
-
-            # Generate individual result for each report in this group
-            for report in q_reports:
-                report_id = report["reportId"]
-                comment = report.get("comment", "")
-
-                # 1. Per-report check for prompt injection
-                if is_injection_suspect(comment):
-                    res = {
-                        "reportId": report_id,
-                        "questionId": qid,
-                        "verdict": "not_actionable",
-                        "repair": None,
-                        "edit": None,
-                        "route": "no_change",
-                        "confidence": 0.95,
-                        "evidence": "Student report comment contains adversarial prompt-injection pattern. Treated as untrusted input; question evaluated independently.",
-                        "student_reply": generate_student_reply("not_actionable", None, comment, "")
-                    }
-                    results.append(res)
-                    continue
-
-                # 2. Use group analysis
-                verdict = q_analysis["verdict"]
-                repair = q_analysis.get("repair")
-                edit = q_analysis.get("edit")
-                confidence = q_analysis.get("confidence", 0.9)
-                evidence = q_analysis.get("evidence", "")
-
-                candidate_result = {
-                    "reportId": report_id,
-                    "questionId": qid,
-                    "verdict": verdict,
-                    "repair": repair,
-                    "edit": edit,
-                    "confidence": confidence,
-                    "evidence": evidence
-                }
-
-                # 3. Apply strict safety validation and route assignment
-                validated = validate_and_sanitize_result(candidate_result, self.taxonomy)
-
-                # 4. Generate student reply
-                reply = generate_student_reply(
-                    validated["verdict"],
-                    validated.get("repair"),
-                    comment,
-                    validated.get("evidence", ""),
-                    validated.get("edit")
-                )
-                validated["student_reply"] = reply
-
-                results.append(validated)
-
-        # Sort results by reportId so output is clean and deterministic
-        results.sort(key=lambda x: x["reportId"])
-        return results
+        results = []
+        for batch_index, batch in enumerate(batches):
+            batch_analysis = completed[str(batch_index)]
+            for i, (qid, reports) in enumerate(batch):
+                analysis = batch_analysis[str(i)] if str(i) in batch_analysis else batch_analysis[i]
+                question = self.questions_by_id.get(qid, {})
+                content = self.get_question_content(question)
+                for report in reports:
+                    comment = report.get("comment", "")
+                    candidate = {k: analysis.get(k) for k in ("verdict", "repair", "edit", "confidence", "evidence", "verification")}
+                    if not isinstance(candidate.get("confidence"), (int, float)) or not 0 <= candidate["confidence"] <= 1:
+                        candidate["confidence"] = 0.1
+                    if not isinstance(candidate.get("evidence"), str) or len(candidate["evidence"].strip()) < 6:
+                        candidate["evidence"] = "The model did not provide sufficient evidence; faculty review is required."
+                    if is_injection_suspect(comment):
+                        candidate.update(verdict="not_actionable", repair=None, edit=None, confidence=0.95,
+                                         evidence="Student comment contains an instruction-like pattern; treated as untrusted report content.")
+                    edit = candidate.get("edit")
+                    source_value = question.get(edit.get("field")) if isinstance(edit, dict) and edit.get("field") == "questionType" else content.get(edit.get("field")) if isinstance(edit, dict) else None
+                    source_text = source_value if isinstance(source_value, str) else json.dumps(source_value, ensure_ascii=False) if source_value is not None else ""
+                    if isinstance(edit, dict) and edit.get("find") not in source_text:
+                        candidate["edit"] = None
+                        candidate["confidence"] = min(float(candidate.get("confidence", 0)), 0.5)
+                        candidate["evidence"] = str(candidate.get("evidence", "")) + " Proposed exact text was not found in the source; sent for faculty review."
+                    validated = validate_and_sanitize_result(candidate, self.taxonomy)
+                    validated.pop("verification", None)
+                    confidence = validated.get("confidence", 0)
+                    if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                        validated.update(confidence=0.1, edit=None, route="faculty_review")
+                    validated.update(reportId=report["reportId"], questionId=qid,
+                        student_reply=generate_student_reply(validated["verdict"], validated.get("repair"), comment,
+                                                             validated.get("evidence", ""), validated.get("edit")))
+                    results.append(validated)
+        if len(results) != len(self.reports):
+            raise RuntimeError("Not every report was validated; final results are withheld")
+        report_ids = {report["reportId"] for report in self.reports}
+        if {result["reportId"] for result in results} != report_ids:
+            raise RuntimeError("Report coverage validation failed; final results are withheld")
+        required = {"reportId", "questionId", "verdict", "repair", "edit", "route", "confidence", "evidence", "student_reply"}
+        if any(set(result) != required or result["verdict"] not in self.taxonomy.get("verdicts", {})
+               or result["route"] not in {"auto_apply", "faculty_review", "no_change"}
+               or not isinstance(result["evidence"], str) or len(result["evidence"]) < 6
+               or not isinstance(result["student_reply"], str) or not 0 <= result["confidence"] <= 1
+               for result in results):
+            raise RuntimeError("Result schema validation failed; final results are withheld")
+        return sorted(results, key=lambda result: result["reportId"])
 

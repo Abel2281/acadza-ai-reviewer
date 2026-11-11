@@ -1,9 +1,11 @@
 import json
 import re
-import time
 import httpx
 from typing import Optional, Dict, Any, List
 from backend.config import GEMINI_API_KEY, GEMINI_MODEL
+
+class GeminiQuotaError(RuntimeError):
+    """The API rejected the request because its quota is exhausted."""
 
 class GeminiClient:
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
@@ -34,7 +36,7 @@ class GeminiClient:
                 "parts": [{"text": system_instruction}]
             }
 
-        max_retries = 3
+        max_retries = 1
         for attempt in range(max_retries):
             try:
                 response = httpx.post(
@@ -51,14 +53,15 @@ class GeminiClient:
                         text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                         return text
                 elif response.status_code == 429:
-                    wait_time = (attempt + 1) * 3
-                    time.sleep(wait_time)
+                    raise GeminiQuotaError("Gemini quota exhausted (HTTP 429)")
                 else:
                     print(f"Gemini API returned status {response.status_code}: {response.text}")
                     return None
+            except GeminiQuotaError:
+                raise
             except Exception as e:
                 print(f"Error calling Gemini API: {e}")
-                time.sleep(2)
+                return None
 
         return None
 

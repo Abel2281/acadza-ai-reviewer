@@ -124,30 +124,22 @@
     "questionId": "622f08d7b70e4b50e4500a1b",
     "verdict": "defect",
     "repair": "option_repair",
-    "edit": {
-      "field": "question",
-      "find": "</h3>",
-      "replace": "<br/>(D) 14 m/s</h3>"
-    },
+    "edit": null,
     "confidence": 0.94,
-    "evidence": "Question HTML provides only 3 options (A, B, C) for a standard single-choice question (SCQ), missing Option D entirely.",
-    "route": "auto_apply",
-    "student_reply": "Good eye! An option was truncated or missing in the question display. We are repairing the option text right away so everyone can solve it without confusion."
+    "evidence": "The question has only options A, B, and C; the solution calculates 10 m/s, which is option C. The intended missing option cannot be safely recovered.",
+    "route": "faculty_review",
+    "student_reply": "Thank you for reporting this. The question shows only three options, and the solution points to option C. Our faculty is reviewing what should be restored before any change is made."
   },
   {
     "reportId": "R010",
     "questionId": "622f08d7b70e4b50e4500a1b",
     "verdict": "defect",
     "repair": "option_repair",
-    "edit": {
-      "field": "question",
-      "find": "</h3>",
-      "replace": "<br/>(D) 14 m/s</h3>"
-    },
+    "edit": null,
     "confidence": 0.94,
-    "evidence": "Question HTML provides only 3 options (A, B, C) for a standard single-choice question (SCQ), missing Option D entirely.",
-    "route": "auto_apply",
-    "student_reply": "Good eye! An option was truncated or missing in the question display. We are repairing the option text right away so everyone can solve it without confusion."
+    "evidence": "The question has only options A, B, and C; the solution calculates 10 m/s, which is option C. The intended missing option cannot be safely recovered.",
+    "route": "faculty_review",
+    "student_reply": "Thank you for reporting this. The question shows only three options, and the solution points to option C. Our faculty is reviewing what should be restored before any change is made."
   },
   {
     "reportId": "R011",
