@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Ensure MathML content displays cleanly with proportional sizing */
+math {
+  font-family: "Cambria Math", "Latin Modern Math", "STIX Two Math", serif;
+  font-size: 1.05em;
+}
